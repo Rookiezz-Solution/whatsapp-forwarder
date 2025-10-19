@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WP Automation</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <link rel="stylesheet" href="css/styles.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1><img src="/favicon.svg" alt="Rookiezz Logo" class="brand-logo"> WP Automation</h1>
+            <div id="connection-status" class="status disconnected">
+                <span class="status-dot"></span>
+                <span class="status-text">Disconnected</span>
+            </div>
+            <div class="header-actions">
+                <button id="connect-btn" class="btn" title="Connect WhatsApp">Connect</button>
+                <button id="disconnect-btn" class="btn" title="Disconnect WhatsApp">Disconnect</button>
+                <button id="logout-btn" class="btn btn-danger" title="Logout and clear session">Logout</button>
+            </div>
+        </header>
+
+        <div class="main-content">
+            <div class="sidebar">
+                <div class="qr-container" id="qr-container">
+                    <h2>Scan QR Code</h2>
+                    <div id="qrcode">
+                        <p class="qr-placeholder">Waiting for QR code...</p>
+                    </div>
+                    <p class="qr-help">Scan this QR code with WhatsApp on your phone to log in</p>
+                </div>
+
+                <div class="config-section">
+                    <h2>Configuration</h2>
+                    <form id="target-group-form">
+                        <div class="form-group">
+                            <label for="target-group">Target Group Name:</label>
+                            <input type="text" id="target-group" name="target-group" placeholder="Enter group name">
+                            <div id="group-hint" class="group-hint"></div>
+                        </div>
+                        <button type="submit" class="btn">Save</button>
+                    </form>
+                </div>
+            </div>
+
+            <div class="message-container">
+                <div class="message-header">
+                    <h2>Message Log</h2>
+                    <div class="message-filters">
+                        <button class="filter-btn active" data-filter="all">All</button>
+                        <button class="filter-btn" data-filter="incoming">Incoming</button>
+                        <button class="filter-btn" data-filter="forwarded">Forwarded</button>
+                    </div>
+                </div>
+                
+                <div class="messages" id="messages">
+                    <p class="empty-state">No messages yet. Messages will appear here when received.</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="notification" id="notification">
+            <span class="notification-message"></span>
+            <button class="notification-close">&times;</button>
+        </div>
+
+        <footer class="site-footer">
+            Designed and Developed with <span class="heart">❤</span> by <a href="https://rookiezzsolutions.com" target="_blank" rel="noopener noreferrer" class="rookiezz-link">Rookiezz</a>
+        </footer>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.4/moment.min.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>

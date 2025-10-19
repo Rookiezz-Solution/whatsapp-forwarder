@@ -1,0 +1,19 @@
+# Node & build
+node_modules/
+dist/
+
+# Runtime data
+logs/
+*.log
+data/messages.db
+
+# WhatsApp web session/cache
+.wwebjs_auth/
+.wwebjs_cache/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+
+# Env
+.env
