@@ -74,7 +74,7 @@ function attachClientHandlers(c) {
         io.emit('status', { status: connectionStatus, message: reason });
     });
 
-    // Message handling
+    // Message handling (supports text and media)
     c.on('message', async (message) => {
         try {
             // Skip messages from groups
@@ -85,41 +85,74 @@ function attachClientHandlers(c) {
             const contactName = contact.pushname || contact.number;
             const messageContent = message.body;
             const timestamp = new Date().toISOString();
+            const msgType = message.type || 'chat';
 
-            logInfo(`New message from ${contactName}: ${messageContent}`);
+            let displayContent = messageContent;
 
-            // Log message to database
-            await db.logMessage(contactName, messageContent, timestamp, 'incoming');
-
-            // Forward message to target group
+            // Determine target group
             const targetGroupChat = await getTargetGroupChat(c, targetGroup);
 
-            if (targetGroupChat) {
-                await targetGroupChat.sendMessage(`*Forwarded from ${contactName}*:\n${messageContent}`);
-                logInfo(`Message forwarded to group: ${targetGroup}`);
-                
-                // Log forwarded message
-                await db.logMessage(contactName, messageContent, timestamp, 'forwarded', targetGroup);
-                
-                // Emit to dashboard
-                io.emit('newMessage', {
-                    type: 'forwarded',
-                    from: contactName,
-                    to: targetGroup,
-                    content: messageContent,
-                    timestamp
-                });
+            if (message.hasMedia) {
+                // Label content for dashboard/database
+                const label = (msgType || 'media').toUpperCase();
+                displayContent = `[${label}]${messageContent ? ` ${messageContent}` : ''}`;
+
+                logInfo(`New media message from ${contactName} (${msgType})`);
+                await db.logMessage(contactName, displayContent, timestamp, 'incoming');
+
+                if (targetGroupChat) {
+                    try {
+                        const media = await message.downloadMedia();
+                        if (!media) throw new Error('Failed to download media');
+                        const captionPrefix = `Forwarded from ${contactName}`;
+                        const caption = messageContent ? `${captionPrefix}:\n${messageContent}` : captionPrefix;
+                        await targetGroupChat.sendMessage(media, { caption });
+                        logInfo(`Media forwarded to group: ${targetGroup}`);
+                        await db.logMessage(contactName, displayContent, timestamp, 'forwarded', targetGroup);
+                        io.emit('newMessage', {
+                            type: 'forwarded',
+                            from: contactName,
+                            to: targetGroup,
+                            content: displayContent,
+                            timestamp
+                        });
+                    } catch (err) {
+                        logError(err, 'Media Forwarding');
+                        io.emit('error', { message: 'Failed to forward media', error: err.message });
+                    }
+                } else {
+                    const errorMsg = `Target group "${targetGroup}" not found`;
+                    logError(errorMsg, 'Message Forwarding');
+                    io.emit('error', { message: errorMsg });
+                }
             } else {
-                const errorMsg = `Target group "${targetGroup}" not found`;
-                logError(errorMsg, 'Message Forwarding');
-                io.emit('error', { message: errorMsg });
+                // Text-only message path
+                logInfo(`New message from ${contactName}: ${messageContent}`);
+                await db.logMessage(contactName, messageContent, timestamp, 'incoming');
+
+                if (targetGroupChat) {
+                    await targetGroupChat.sendMessage(`*Forwarded from ${contactName}*:\n${messageContent}`);
+                    logInfo(`Message forwarded to group: ${targetGroup}`);
+                    await db.logMessage(contactName, messageContent, timestamp, 'forwarded', targetGroup);
+                    io.emit('newMessage', {
+                        type: 'forwarded',
+                        from: contactName,
+                        to: targetGroup,
+                        content: messageContent,
+                        timestamp
+                    });
+                } else {
+                    const errorMsg = `Target group "${targetGroup}" not found`;
+                    logError(errorMsg, 'Message Forwarding');
+                    io.emit('error', { message: errorMsg });
+                }
             }
 
-            // Emit to dashboard
+            // Emit incoming message to dashboard (shows text or media label)
             io.emit('newMessage', {
                 type: 'incoming',
                 from: contactName,
-                content: messageContent,
+                content: displayContent,
                 timestamp
             });
         } catch (error) {
