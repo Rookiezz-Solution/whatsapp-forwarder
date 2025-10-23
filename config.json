@@ -1,4 +1,8 @@
 {
-  "targetGroupName": "Test",
-  "dbPath": "D:\\Rookiezz Solutions\\Trial\\WP Automation\\data\\messages.db"
+  "targetGroupName": "Jaichitom",
+  "dbPath": "D:/Rookiezz Solutions/Trial/WP auto Final/whatsapp-forwarder/data/messages.db",
+  "sendVideosAsDocument": false,
+  "forwardVideosAsLink": false,
+  "publicBaseUrl": "http://193.203.163.85",
+  "disableVideoForwarding": true
 }
