@@ -4,5 +4,7 @@
   "sendVideosAsDocument": false,
   "forwardVideosAsLink": false,
   "publicBaseUrl": "http://193.203.163.85",
-  "disableVideoForwarding": true
+  "uploadsDir": "D:\\Rookiezz Solutions\\Trial\\WP auto Final\\whatsapp-forwarder\\uploads",
+  "disableVideoForwarding": true,
+  "forwardHeaderTTLMinutes": 10
 }

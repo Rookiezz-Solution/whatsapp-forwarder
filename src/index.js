@@ -43,6 +43,14 @@ let qrCodeData = '';
 let connectionStatus = 'disconnected';
 let targetGroup = config.targetGroupName;
 
+// Forward header shown when sender changes
+let lastForwardSenderNumber = null;
+function shouldSendForwardHeader(number) {
+    const should = number !== lastForwardSenderNumber;
+    lastForwardSenderNumber = number;
+    return should;
+}
+
 // Attach WhatsApp client event handlers to a given client instance
 function attachClientHandlers(c) {
     // QR events
@@ -103,6 +111,7 @@ function attachClientHandlers(c) {
 
             // Determine target group
             const targetGroupChat = await getTargetGroupChat(c, targetGroup);
+            const sendHeader = shouldSendForwardHeader(contact.number);
 
             // When video forwarding is disabled, send a text notice to group
             if (message.hasMedia && msgType === 'video' && config.disableVideoForwarding) {
@@ -113,6 +122,9 @@ function attachClientHandlers(c) {
 
                 if (targetGroupChat) {
                     const notifier = `${contactName} (${contact.number}) has shared a Video of the issue.`;
+                    if (sendHeader) {
+                        await targetGroupChat.sendMessage(`*Forwarded from ${contactName} (${contact.number})*`);
+                    }
                     await targetGroupChat.sendMessage(notifier);
                     logInfo(`Sent video notice to group: ${notifier}`);
                 } else {
@@ -137,8 +149,7 @@ function attachClientHandlers(c) {
                         const info = `type=${msgType}, mime=${media.mimetype}, filename=${media.filename || ''}, size=${media.data ? media.data.length : 0}`;
                         logInfo(`Media details: ${info}`);
 
-                        const captionPrefix = `Forwarded from ${contactName} (${contact.number})`;
-                        const caption = messageContent ? `${captionPrefix}:\n${messageContent}` : captionPrefix;
+                        const caption = messageContent || '';
                         
                         // Build send options with sensible defaults
                         const deduceExt = (mime) => {
@@ -158,6 +169,10 @@ function attachClientHandlers(c) {
                         if (defaultFilename) sendOptsBase.filename = defaultFilename;
                         if (msgType === 'ptt') sendOptsBase.sendAudioAsVoice = true;
 
+                        if (sendHeader) {
+                            await targetGroupChat.sendMessage(`*Forwarded from ${contactName} (${contact.number})*`);
+                        }
+
                         if (isVideo && config.forwardVideosAsLink) {
                             // Save video to uploads and forward a link text instead of media
                             const ext = deduceExt(media.mimetype);
@@ -169,7 +184,7 @@ function attachClientHandlers(c) {
                                     ? config.publicBaseUrl.trim()
                                     : `http://localhost:${process.env.PORT || 3000}`;
                                 const link = `${baseUrl}/uploads/${encodeURIComponent(filename)}`;
-                                const text = `${caption}\n${link}`;
+                                const text = (caption && caption.trim().length > 0) ? `${caption}\n${link}` : link;
                                 await targetGroupChat.sendMessage(text);
                             } catch (linkErr) {
                                 logError(linkErr, 'Link Forwarding');
@@ -257,7 +272,10 @@ function attachClientHandlers(c) {
                 await db.logMessage(contactName, messageContent, timestamp, 'incoming');
 
                 if (targetGroupChat) {
-                    await targetGroupChat.sendMessage(`*Forwarded from ${contactName} (${contact.number})*:\n${messageContent}`);
+                    if (sendHeader) {
+                        await targetGroupChat.sendMessage(`*Forwarded from ${contactName} (${contact.number})*`);
+                    }
+                    await targetGroupChat.sendMessage(messageContent);
                     logInfo(`Message forwarded to group: ${targetGroup}`);
                     await db.logMessage(contactName, messageContent, timestamp, 'forwarded', targetGroup);
                     io.emit('newMessage', {
