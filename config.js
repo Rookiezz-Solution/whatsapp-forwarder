@@ -9,7 +9,8 @@ const defaultConfig = {
     forwardVideosAsLink: false,
     publicBaseUrl: '',
     uploadsDir: path.join(__dirname, 'uploads'),
-    disableVideoForwarding: false
+    disableVideoForwarding: false,
+    forwardHeaderTTLMinutes: 10
 };
 
 // Path to config file
