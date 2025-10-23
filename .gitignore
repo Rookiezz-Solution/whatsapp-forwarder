@@ -17,3 +17,7 @@ Thumbs.db
 
 # Env
 .env
+
+# Media/temp
+uploads/
+tmp/

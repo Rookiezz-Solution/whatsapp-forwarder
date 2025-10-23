@@ -4,7 +4,12 @@ const path = require('path');
 // Default configuration
 const defaultConfig = {
     targetGroupName: 'Message Forwarding',  // Default target group name
-    dbPath: path.join(__dirname, 'data', 'messages.db')
+    dbPath: path.join(__dirname, 'data', 'messages.db'),
+    sendVideosAsDocument: false,
+    forwardVideosAsLink: false,
+    publicBaseUrl: '',
+    uploadsDir: path.join(__dirname, 'uploads'),
+    disableVideoForwarding: false
 };
 
 // Path to config file
@@ -25,7 +30,7 @@ if (!fs.existsSync(configPath)) {
 let config;
 try {
     const configData = fs.readFileSync(configPath, 'utf8');
-    config = JSON.parse(configData);
+    config = { ...defaultConfig, ...JSON.parse(configData) };
 } catch (error) {
     console.error('Error reading config file:', error);
     config = defaultConfig;

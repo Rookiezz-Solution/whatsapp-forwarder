@@ -2,7 +2,7 @@ const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
 const path = require('path');
-const { Client, LocalAuth } = require('whatsapp-web.js');
+const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode');
 const db = require('./database');
 const config = require('../config');
@@ -17,6 +17,18 @@ const io = socketIo(server);
 // Serve static files
 app.use(express.static(path.join(__dirname, '../public')));
 app.use(express.json());
+
+// Serve uploads when link forwarding is enabled
+if (config.forwardVideosAsLink) {
+    try {
+        if (!fs.existsSync(config.uploadsDir)) {
+            fs.mkdirSync(config.uploadsDir, { recursive: true });
+        }
+    } catch (err) {
+        logError(err, 'Uploads Directory');
+    }
+    app.use('/uploads', express.static(config.uploadsDir));
+}
 
 // Initialize WhatsApp client (mutable for re-creation)
 let client = new Client({
@@ -92,6 +104,23 @@ function attachClientHandlers(c) {
             // Determine target group
             const targetGroupChat = await getTargetGroupChat(c, targetGroup);
 
+            // When video forwarding is disabled, send a text notice to group
+            if (message.hasMedia && msgType === 'video' && config.disableVideoForwarding) {
+                const label = (msgType || 'media').toUpperCase();
+                displayContent = `[${label}]${messageContent ? ` ${messageContent}` : ''}`;
+                await db.logMessage(contactName, displayContent, timestamp, 'incoming');
+                io.emit('newMessage', { type: 'incoming', from: contactName, content: displayContent, timestamp });
+
+                if (targetGroupChat) {
+                    const notifier = `${contactName} (${contact.number}) has shared a Video of the issue.`;
+                    await targetGroupChat.sendMessage(notifier);
+                    logInfo(`Sent video notice to group: ${notifier}`);
+                } else {
+                    logInfo('Target group not found; video notice not sent.');
+                }
+                return;
+            }
+
             if (message.hasMedia) {
                 // Label content for dashboard/database
                 const label = (msgType || 'media').toUpperCase();
@@ -104,9 +133,106 @@ function attachClientHandlers(c) {
                     try {
                         const media = await message.downloadMedia();
                         if (!media) throw new Error('Failed to download media');
-                        const captionPrefix = `Forwarded from ${contactName}`;
+
+                        const info = `type=${msgType}, mime=${media.mimetype}, filename=${media.filename || ''}, size=${media.data ? media.data.length : 0}`;
+                        logInfo(`Media details: ${info}`);
+
+                        const captionPrefix = `Forwarded from ${contactName} (${contact.number})`;
                         const caption = messageContent ? `${captionPrefix}:\n${messageContent}` : captionPrefix;
-                        await targetGroupChat.sendMessage(media, { caption });
+                        
+                        // Build send options with sensible defaults
+                        const deduceExt = (mime) => {
+                            if (!mime) return 'bin';
+                            const map = {
+                                'video/mp4': 'mp4',
+                                'video/3gpp': '3gp',
+                                'video/avi': 'avi',
+                                'video/mpeg': 'mpeg',
+                                'video/quicktime': 'mov'
+                            };
+                            return map[mime] || mime.split('/').pop();
+                        };
+                        const isVideo = (msgType === 'video') || (media.mimetype && media.mimetype.startsWith('video/'));
+                        const defaultFilename = isVideo ? `forwarded-video.${deduceExt(media.mimetype)}` : (media.filename || undefined);
+                        const sendOptsBase = { caption };
+                        if (defaultFilename) sendOptsBase.filename = defaultFilename;
+                        if (msgType === 'ptt') sendOptsBase.sendAudioAsVoice = true;
+
+                        if (isVideo && config.forwardVideosAsLink) {
+                            // Save video to uploads and forward a link text instead of media
+                            const ext = deduceExt(media.mimetype);
+                            const safeBase = (contactName || 'sender').replace(/[^a-z0-9\-_]+/gi, '_');
+                            const filename = media.filename || `forwarded_${safeBase}_${Date.now()}.${ext}`;
+                            try {
+                                await fs.promises.writeFile(path.join(config.uploadsDir, filename), Buffer.from(media.data, 'base64'));
+                                const baseUrl = (config.publicBaseUrl && config.publicBaseUrl.trim().length > 0)
+                                    ? config.publicBaseUrl.trim()
+                                    : `http://localhost:${process.env.PORT || 3000}`;
+                                const link = `${baseUrl}/uploads/${encodeURIComponent(filename)}`;
+                                const text = `${caption}\n${link}`;
+                                await targetGroupChat.sendMessage(text);
+                            } catch (linkErr) {
+                                logError(linkErr, 'Link Forwarding');
+                                throw linkErr; // fall back to existing logic
+                            }
+                        } else if (isVideo && config.sendVideosAsDocument) {
+                            // Prefer sending as document via base64 first
+                            const filename = media.filename || defaultFilename || `forwarded-video.${deduceExt(media.mimetype)}`;
+                            const mime = media.mimetype || 'video/mp4';
+                            const base64Doc = new MessageMedia(mime, media.data, filename);
+                            try {
+                                await targetGroupChat.sendMessage(base64Doc, { ...sendOptsBase, filename, sendMediaAsDocument: true });
+                            } catch (docErr) {
+                                logInfo(`Base64 document send failed: ${docErr.message || docErr}. Retrying via temp file path.`);
+                                const tmpDir = path.join(__dirname, '../tmp');
+                                if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+                                const tempPath = path.join(tmpDir, filename);
+                                await fs.promises.writeFile(tempPath, Buffer.from(media.data, 'base64'));
+                                const fileMedia = MessageMedia.fromFilePath(tempPath);
+                                try {
+                                    await targetGroupChat.sendMessage(fileMedia, { ...sendOptsBase, filename, sendMediaAsDocument: true });
+                                } finally {
+                                    try { await fs.promises.unlink(tempPath); } catch (_) {}
+                                }
+                            }
+                        } else {
+                            try {
+                                // First attempt: send as regular media
+                                await targetGroupChat.sendMessage(media, sendOptsBase);
+                            } catch (primaryErr) {
+                                logInfo(`Primary media send failed: ${primaryErr.message || primaryErr}`);
+                                // Fallbacks for video: try with explicit filename, then as document (base64, then file path)
+                                if (isVideo) {
+                                    const explicitFilename = media.filename || defaultFilename || `forwarded-video.${deduceExt(media.mimetype)}`;
+                                    try {
+                                        logInfo(`Retrying video send with explicit filename: ${explicitFilename}`);
+                                        await targetGroupChat.sendMessage(media, { ...sendOptsBase, filename: explicitFilename });
+                                    } catch (secondaryErr) {
+                                        logInfo(`Second attempt failed: ${secondaryErr.message || secondaryErr}. Retrying as document (base64).`);
+                                        const mime = media.mimetype || 'video/mp4';
+                                        const base64Doc = new MessageMedia(mime, media.data, explicitFilename);
+                                        try {
+                                            await targetGroupChat.sendMessage(base64Doc, { ...sendOptsBase, filename: explicitFilename, sendMediaAsDocument: true });
+                                        } catch (thirdErr) {
+                                            logInfo(`Base64 document send failed: ${thirdErr.message || thirdErr}. Retrying via temp file.`);
+                                            const tmpDir = path.join(__dirname, '../tmp');
+                                            if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+                                            const tempPath = path.join(tmpDir, explicitFilename);
+                                            await fs.promises.writeFile(tempPath, Buffer.from(media.data, 'base64'));
+                                            const fileMedia = MessageMedia.fromFilePath(tempPath);
+                                            try {
+                                                await targetGroupChat.sendMessage(fileMedia, { ...sendOptsBase, filename: explicitFilename, sendMediaAsDocument: true });
+                                            } finally {
+                                                try { await fs.promises.unlink(tempPath); } catch (_) {}
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    throw primaryErr;
+                                }
+                            }
+                        }
+
                         logInfo(`Media forwarded to group: ${targetGroup}`);
                         await db.logMessage(contactName, displayContent, timestamp, 'forwarded', targetGroup);
                         io.emit('newMessage', {
@@ -131,7 +257,7 @@ function attachClientHandlers(c) {
                 await db.logMessage(contactName, messageContent, timestamp, 'incoming');
 
                 if (targetGroupChat) {
-                    await targetGroupChat.sendMessage(`*Forwarded from ${contactName}*:\n${messageContent}`);
+                    await targetGroupChat.sendMessage(`*Forwarded from ${contactName} (${contact.number})*:\n${messageContent}`);
                     logInfo(`Message forwarded to group: ${targetGroup}`);
                     await db.logMessage(contactName, messageContent, timestamp, 'forwarded', targetGroup);
                     io.emit('newMessage', {
@@ -383,3 +509,6 @@ app.get('/api/groups', asyncHandler(async (req, res) => {
         res.status(500).json({ error: 'Failed to list groups' });
     }
 }));
+
+// Ensure uploads directory exists and serve statically if link-forwarding enabled
+// Link-forwarding is integrated into the existing app and message handler above.
